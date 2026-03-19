@@ -443,15 +443,18 @@ class HidenCloudBot:
             sleep_random(1000, 2000)
 
             res = self.submit_renew_request(service['id'], soup, manage_res.url)
+            handled = self.try_handle_invoice_from_response(service['id'], res, allow_invoice_poll=False)
 
-            if not self.try_handle_invoice_from_response(service['id'], res, allow_invoice_poll=False) and res.status_code == 419:
+            if not handled and res.status_code == 419:
                 self.log("♻️ 首次续期请求返回 419，刷新管理页获取新 Token 后重试一次...")
                 sleep_random(1000, 2000)
                 manage_res, soup = self.fetch_manage_page(service['id'])
                 res = self.submit_renew_request(service['id'], soup, manage_res.url)
+                handled = False
 
             # ================== 5. 结果校验与支付 ==================
-            handled = self.try_handle_invoice_from_response(service['id'], res)
+            if not handled:
+                handled = self.try_handle_invoice_from_response(service['id'], res)
 
             if not handled and allow_rebuild_retry and res.status_code == 419:
                 self.log("♻️ 当前会话内续期仍失败，模拟重跑 Job：重建会话后完整重试当前服务一次...")
@@ -509,6 +512,11 @@ class HidenCloudBot:
             self.log(f"访问账单失败: {e}")
 
     def perform_pay_from_html(self, html_content, current_url):
+        normalized_current_url = self.normalize_url(current_url)
+        if normalized_current_url in self.processed_invoices:
+            self.log(f"⏭️ 账单已处理，跳过重复支付: {normalized_current_url}")
+            return
+
         soup = BeautifulSoup(html_content, 'html.parser')
         self._refresh_csrf(soup)
 
@@ -556,7 +564,7 @@ class HidenCloudBot:
 
             if res.status_code == 200:
                 self.log("✅ 支付成功！")
-                self.processed_invoices.add(self.normalize_url(current_url))
+                self.processed_invoices.add(normalized_current_url)
             else:
                 self.log(f"⚠️ 支付响应: {res.status_code}")
         except Exception as e:
